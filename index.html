@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Box Review Tool</title>
+<style>
+  /* ---------- Design tokens (light by default, dark variants below) ---------- */
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface-2: #eef1f4;
+    --ink: #1b2430;
+    --ink-soft: #5a6676;
+    --line: #d9dee5;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --danger: #b42318;
+    --stage-bg: #e3e8ee;
+    --warn-bg: #fff4d6;
+    --warn-ink: #6b4a00;
+    --good: #15803d;
+    --bad: #b42318;
+
+    /* Review verdict colors */
+    --v-none: #5a6676;
+    --v-correct: #15803d;
+    --v-wrong_label: #a21caf;
+    --v-bad_box: #a16207;
+    --v-duplicate: #0e7490;
+    --v-false_alarm: #dc2626;
+    --v-added: #2563eb;
+
+    color-scheme: light;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171d; --surface: #1b222b; --surface-2: #232c37;
+      --ink: #e8edf3; --ink-soft: #9aa7b6; --line: #303b48;
+      --accent: #2dd4bf; --accent-ink: #06201d; --danger: #ff8a7a;
+      --stage-bg: #0d1116; --warn-bg: #3a2f10; --warn-ink: #f3d98b;
+      --good: #4ade80; --bad: #ff8a7a; --v-none: #9aa7b6;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171d; --surface: #1b222b; --surface-2: #232c37;
+    --ink: #e8edf3; --ink-soft: #9aa7b6; --line: #303b48;
+    --accent: #2dd4bf; --accent-ink: #06201d; --danger: #ff8a7a;
+    --stage-bg: #0d1116; --warn-bg: #3a2f10; --warn-ink: #f3d98b;
+    --good: #4ade80; --bad: #ff8a7a; --v-none: #9aa7b6;
+    color-scheme: dark;
+  }
+
+  /* ---------- Base ---------- */
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .page { max-width: 1280px; margin: 0 auto; padding: 20px 16px 40px; }
+  header.top h1 { margin: 0 0 4px; font-size: 1.5rem; letter-spacing: -0.01em; }
+  header.top p { margin: 0 0 14px; color: var(--ink-soft); max-width: 80ch; }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .panel + .panel { margin-top: 16px; }
+  .panel h2 { margin: 0 0 10px; font-size: 1rem; }
+
+  /* ---------- Controls ---------- */
+  button, select, input[type="number"] {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px;
+  }
+  button, select { cursor: pointer; }
+  input[type="number"] { width: 80px; padding: 6px 8px; }
+  button:hover, select:hover { border-color: var(--ink-soft); }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, .stage-overlay:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input[type="file"] { display: none; }
+  .hint { color: var(--ink-soft); font-size: 0.88rem; margin: 0 0 10px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .inline-label { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.9rem; }
+  .status { min-height: 1.4em; margin: 8px 0 12px; font-size: 0.9rem; color: var(--ink-soft); }
+  .status.error { color: var(--danger); }
+  .or { color: var(--ink-soft); font-size: 0.9rem; }
+
+  /* ---------- Layout ---------- */
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+  @media (max-width: 960px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  /* ---------- Image stage ---------- */
+  .stage {
+    background: var(--stage-bg); border-radius: 8px; min-height: 320px;
+    display: flex; align-items: center; justify-content: center; padding: 10px; overflow: hidden;
+  }
+  .empty { text-align: center; color: var(--ink-soft); max-width: 40ch; }
+  .empty strong { display: block; color: var(--ink); margin-bottom: 4px; }
+
+  /* The canvas shrinks to the displayed image size, so the overlay always matches the image */
+  .canvas { position: relative; display: none; max-width: 100%; line-height: 0; }
+  .canvas.show { display: block; }
+  .canvas img {
+    display: block; max-width: 100%; max-height: 70vh; width: auto; height: auto;
+    user-select: none; -webkit-user-drag: none;
+  }
+  .stage-overlay { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+
+  /* ---------- Boxes (positioned in % so they follow the image size) ---------- */
+  .box {
+    position: absolute; border: 2px solid var(--c);
+    background: color-mix(in srgb, var(--c) 14%, transparent); cursor: pointer;
+  }
+  .box[data-v="none"]  { --c: var(--v-none); border-style: dashed; background: transparent; }
+  .box[data-v="correct"]      { --c: var(--v-correct); }
+  .box[data-v="wrong_label"]  { --c: var(--v-wrong_label); }
+  .box[data-v="bad_box"]      { --c: var(--v-bad_box); }
+  .box[data-v="duplicate"]    { --c: var(--v-duplicate); }
+  .box[data-v="false_alarm"]  { --c: var(--v-false_alarm); }
+  .box[data-v="added"]        { --c: var(--v-added); }
+  .box.editable { cursor: move; }
+  .box.selected { border-width: 3px; background: color-mix(in srgb, var(--c) 24%, transparent); }
+  .box.selected[data-v="none"] { background: color-mix(in srgb, var(--c) 12%, transparent); }
+  .box.draft { border-style: dashed; pointer-events: none; }
+  .tag {
+    position: absolute; left: -2px; bottom: 100%; background: var(--c); color: #fff;
+    font: 600 11px/1 system-ui, sans-serif; padding: 3px 6px; border-radius: 4px 4px 4px 0;
+    white-space: nowrap; pointer-events: none;
+  }
+  .top-edge > .tag { bottom: auto; top: 0; left: 0; border-radius: 0 0 4px 0; }
+  .ghost { position: absolute; border: 2px dashed var(--ink-soft); pointer-events: none; opacity: 0.7; }
+  .key-missed {
+    position: absolute; border: 3px dashed var(--v-added); pointer-events: none;
+    background: color-mix(in srgb, var(--v-added) 10%, transparent);
+  }
+  .key-missed > .tag { background: var(--v-added); }
+  .handle {
+    position: absolute; width: 12px; height: 12px; background: #fff;
+    border: 2px solid var(--c); border-radius: 3px; transform: translate(-50%, -50%);
+  }
+  .handle[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+  .handle[data-h="n"]  { left: 50%; top: 0; cursor: ns-resize; }
+  .handle[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+  .handle[data-h="e"]  { left: 100%; top: 50%; cursor: ew-resize; }
+  .handle[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+  .handle[data-h="s"]  { left: 50%; top: 100%; cursor: ns-resize; }
+  .handle[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+  .handle[data-h="w"]  { left: 0; top: 50%; cursor: ew-resize; }
+
+  /* ---------- Review panel ---------- */
+  .progress { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin: 6px 0; }
+  .progress > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+  .selected-info { margin: 8px 0; font-size: 0.92rem; min-height: 1.4em; }
+  .verdicts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 8px; }
+  .verdicts button { text-align: left; border-left: 5px solid var(--vc); padding: 6px 10px; }
+  .verdicts button kbd { font: 600 0.8rem ui-monospace, monospace; color: var(--ink-soft); margin-right: 6px; }
+  .verdicts button.active { background: var(--surface-2); border-color: var(--vc); font-weight: 700; }
+  .verdicts button.clear { grid-column: 1 / -1; border-left-width: 1px; }
+  .mode-line { font-size: 0.88rem; color: var(--ink-soft); margin: 0 0 8px; }
+
+  /* ---------- Lists ---------- */
+  .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 280px; overflow-y: auto; }
+  .row {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+    border-left: 5px solid var(--rc, var(--v-none)); font-size: 0.9rem;
+  }
+  .row.selected { background: var(--surface-2); }
+  .row[data-v="correct"] { --rc: var(--v-correct); }
+  .row[data-v="wrong_label"] { --rc: var(--v-wrong_label); }
+  .row[data-v="bad_box"] { --rc: var(--v-bad_box); }
+  .row[data-v="duplicate"] { --rc: var(--v-duplicate); }
+  .row[data-v="false_alarm"] { --rc: var(--v-false_alarm); }
+  .row[data-v="added"] { --rc: var(--v-added); }
+  .row .badge { font-size: 0.8rem; color: var(--ink-soft); font-weight: 600; text-align: right; }
+  .row button { padding: 2px 8px; font-size: 0.82rem; }
+  h3.sub { margin: 12px 0 6px; font-size: 0.9rem; }
+  .list-empty { color: var(--ink-soft); font-size: 0.88rem; margin: 0; }
+
+  /* ---------- Practice score ---------- */
+  .score-big { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+  .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 8px 0; font-size: 0.9rem; }
+  .stats dt { color: var(--ink-soft); }
+  .stats dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .result-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; font-size: 0.86rem; }
+  .result-list li { padding: 6px 8px; border-radius: 8px; background: var(--surface-2); }
+  .result-list .ok { color: var(--good); font-weight: 700; }
+  .result-list .no { color: var(--bad); font-weight: 700; }
+  .result-list small { display: block; color: var(--ink-soft); }
+  .notice { margin: 10px 0 0; font-size: 0.84rem; color: var(--ink-soft); }
+  .warn { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-ink); font-size: 0.86rem; }
+
+  /* ---------- Export + self-test ---------- */
+  details summary { cursor: pointer; color: var(--ink-soft); font-size: 0.9rem; }
+  pre.preview {
+    margin: 8px 0 0; padding: 10px; max-height: 240px; overflow: auto; background: var(--surface-2);
+    border-radius: 8px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .tests { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; font-size: 0.88rem; }
+  .tests .fail { color: var(--danger); font-weight: 600; }
+  .tests .result { font-weight: 700; margin-right: 6px; }
+  .disclaimer { margin-top: 16px; color: var(--ink-soft); font-size: 0.85rem; max-width: 80ch; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <h1>AI Box Review Tool</h1>
+    <p>Check boxes made by an AI model. Mark each box as Correct, Wrong label, Bad box, Duplicate or False alarm, then draw the objects the AI missed. In practice mode, the tool plants known errors in the boxes, so it can tell you how many of them you caught.</p>
+  </header>
+
+  <!-- ===================== Start: image, AI boxes or practice set ===================== -->
+  <section class="panel" aria-label="Start">
+    <div class="btn-row">
+      <button type="button" class="primary" id="imgBtn">1. Upload image</button>
+      <input type="file" id="imgInput" accept="image/*">
+
+      <button type="button" id="aiBtn" disabled>2. Load AI boxes (COCO JSON)</button>
+      <input type="file" id="aiInput" accept=".json,application/json">
+
+      <span class="or">or</span>
+
+      <button type="button" id="truthBtn" disabled>2. Make a practice set</button>
+      <input type="file" id="truthInput" accept=".json,application/json">
+      <label class="inline-label">Seed
+        <input type="number" id="seed" min="1" max="999999" step="1" value="1" aria-label="Seed for the practice set">
+      </label>
+
+      <label class="inline-label">Label for boxes I add
+        <select id="labelSelect" aria-label="Label for boxes I add"></select>
+      </label>
+    </div>
+    <p class="hint" style="margin:0">Practice set: load a COCO file with the correct boxes (for example, the COCO export from my first tool). The tool copies it, plants errors, and hides the answers until you press Check my review. Use a new seed each time you try, so you do not just remember the last one.</p>
+  </section>
+  <p class="status" id="status" role="status"></p>
+
+  <div class="layout">
+
+    <!-- ===================== Image ===================== -->
+    <main class="panel" aria-label="Image">
+      <p class="hint">Click an AI box, then choose a verdict. For Wrong label, choose the right label. For Bad box, drag the box or its handles to fix it. Drag on empty space to add a box the AI missed.</p>
+      <div class="stage" id="stage">
+        <div class="empty" id="emptyState">
+          <strong>No image yet</strong>
+          Upload an image, then load AI boxes or make a practice set.
+        </div>
+        <div class="canvas" id="canvas">
+          <img id="img" alt="Image to review" draggable="false">
+          <div class="stage-overlay" id="overlay" tabindex="0" aria-label="Review area. Click a box to review it. Drag on empty space to add a box."></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===================== Right side ===================== -->
+    <aside>
+      <section class="panel" aria-label="Review">
+        <h2>Review</h2>
+        <p class="mode-line" id="modeLine">No boxes loaded yet.</p>
+        <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
+        <p class="hint" id="progressText" style="margin:0 0 8px"></p>
+
+        <div class="selected-info" id="selectedInfo">Select a box on the image or in the list.</div>
+        <div class="verdicts" id="verdicts"></div>
+        <div class="btn-row" id="labelRow" hidden>
+          <label class="inline-label"><span id="fixLabelText">Correct label</span>
+            <select id="fixLabel" aria-label="Correct label"></select>
+          </label>
+        </div>
+        <div class="btn-row" id="addedRow" hidden>
+          <button type="button" class="danger" id="deleteAdded">Delete this added box</button>
+        </div>
+
+        <h3 class="sub">AI boxes (<span id="aiCount">0</span>)</h3>
+        <ul class="list" id="aiList"></ul>
+        <p class="list-empty" id="aiEmpty">None yet.</p>
+
+        <h3 class="sub">Boxes I added (<span id="addedCount">0</span>)</h3>
+        <ul class="list" id="addedList"></ul>
+        <p class="list-empty" id="addedEmpty">None yet.</p>
+      </section>
+
+      <section class="panel" id="practicePanel" aria-label="Practice score" hidden>
+        <h2>Practice score</h2>
+        <p class="hint">The tool planted errors in this set. Review all boxes, add the objects you think are missing, then check your work.</p>
+        <div class="btn-row">
+          <button type="button" class="primary" id="checkBtn">Check my review</button>
+        </div>
+        <div id="scoreBox"></div>
+      </section>
+
+      <section class="panel" aria-label="Export">
+        <h2>Export</h2>
+        <div class="btn-row">
+          <label class="inline-label">Format
+            <select id="exportFormat" aria-label="Export format">
+              <option value="report-json">Review report (JSON)</option>
+              <option value="report-csv">Review report (CSV)</option>
+              <option value="corrected-coco">Corrected boxes (COCO JSON)</option>
+            </select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="primary" id="downloadBtn" disabled>Download</button>
+          <button type="button" id="copyBtn" disabled>Copy</button>
+        </div>
+        <p class="hint" id="exportStatus" style="margin:0 0 8px" role="status"></p>
+        <details>
+          <summary>Preview</summary>
+          <pre class="preview" id="preview"></pre>
+        </details>
+      </section>
+    </aside>
+  </div>
+
+  <section class="panel" aria-label="Self-test" style="margin-top:16px">
+    <details id="selfTestBox">
+      <summary id="selfTestSummary">Self-test</summary>
+      <p class="hint" style="margin-top:8px">These checks run when the page loads. They test the practice-set maker, the scoring and the file readers against answers that can be worked out by hand.</p>
+      <ul class="tests" id="selfTestList"></ul>
+    </details>
+  </section>
+
+  <p class="disclaimer">This is an educational practice tool. The practice score only shows how many planted errors you found in one set of boxes. It is not a certified accuracy result.</p>
+</div>
+
+<script>
+/* =====================================================================
+   AI Box Review Tool
+   - No backend, no API key. Everything runs in the browser.
+   - Box coordinates are stored in the image's ORIGINAL pixel size and drawn
+     as percentages, so boxes stay aligned when the image is resized.
+   - Two ways to work:
+       1) Review: load boxes made by a real AI model (COCO file) and review them.
+       2) Practice: load a file with the CORRECT boxes. The tool copies it, plants
+          known errors, and later scores how many of them the reviewer caught.
+   ===================================================================== */
+
+/* ---------- Settings ---------- */
+const LABELS = ["Person", "Car", "Bicycle", "Dog", "Cat"];
+
+/* Standard COCO category ids for the five labels */
+const COCO_IDS   = { Person: 1, Bicycle: 2, Car: 3, Cat: 17, Dog: 18 };
+const COCO_SUPER = { Person: "person", Bicycle: "vehicle", Car: "vehicle", Cat: "animal", Dog: "animal" };
+const ID_TO_LABEL = {};
+Object.keys(COCO_IDS).forEach((l) => { ID_TO_LABEL[COCO_IDS[l]] = l; });
+
+/* The five verdicts a reviewer can give an AI box. The order matches keys 1 to 5. */
+const VERDICTS = [
+  { key: "correct",     text: "Correct" },
+  { key: "wrong_label", text: "Wrong label" },
+  { key: "bad_box",     text: "Bad box" },
+  { key: "duplicate",   text: "Duplicate" },
+  { key: "false_alarm", text: "False alarm" }
+];
+const VERDICT_TEXT = {};
+VERDICTS.forEach((v) => { VERDICT_TEXT[v.key] = v.text; });
+
+/* Names of the errors the practice set can plant */
+const PLANTED_TEXT = {
+  wrong_label: "Wrong label",
+  bad_shift:   "Bad box (shifted)",
+  bad_loose:   "Bad box (too loose)",
+  duplicate:   "Duplicate box",
+  false_alarm: "False alarm",
+  missed:      "Missed object"
+};
+
+const MATCH_IOU = 0.5;   // a box added by the reviewer must overlap the missed object this much
+
+/* ---------- App state ---------- */
+const state = {
+  image: null,          // { name, width, height } in original pixels
+  ai: [],               // AI boxes: { id, label, x, y, w, h, score, verdict, fixLabel, fixed }
+  added: [],            // boxes added by the reviewer: { id, label, x, y, w, h }
+  nextAddedId: 1,
+  selected: null,       // { kind: "ai" | "added", id }
+  mode: null,           // "review" or "practice"
+  source: "",           // name of the loaded file
+  seed: 1,              // seed used for the practice set
+  key: null,            // answer key (practice mode only). It is never drawn before "Check my review".
+  scoreShown: false
+};
+
+let drag = null;                // active mouse or touch action
+let currentObjectUrl = null;
+
+/* ---------- Element shortcuts ---------- */
+const $ = (id) => document.getElementById(id);
+const els = {
+  imgBtn: $("imgBtn"), imgInput: $("imgInput"), aiBtn: $("aiBtn"), aiInput: $("aiInput"),
+  truthBtn: $("truthBtn"), truthInput: $("truthInput"), seed: $("seed"), labelSelect: $("labelSelect"),
+  status: $("status"), stage: $("stage"), emptyState: $("emptyState"), canvas: $("canvas"), img: $("img"), overlay: $("overlay"),
+  modeLine: $("modeLine"), progressBar: $("progressBar"), progressText: $("progressText"),
+  selectedInfo: $("selectedInfo"), verdicts: $("verdicts"), labelRow: $("labelRow"), fixLabel: $("fixLabel"),
+  fixLabelText: $("fixLabelText"), addedRow: $("addedRow"), deleteAdded: $("deleteAdded"),
+  aiList: $("aiList"), aiEmpty: $("aiEmpty"), aiCount: $("aiCount"),
+  addedList: $("addedList"), addedEmpty: $("addedEmpty"), addedCount: $("addedCount"),
+  practicePanel: $("practicePanel"), checkBtn: $("checkBtn"), scoreBox: $("scoreBox"),
+  exportFormat: $("exportFormat"), downloadBtn: $("downloadBtn"), copyBtn: $("copyBtn"),
+  exportStatus: $("exportStatus"), preview: $("preview"),
+  selfTestBox: $("selfTestBox"), selfTestSummary: $("selfTestSummary"), selfTestList: $("selfTestList")
+};
+
+/* =====================================================================
+   PURE FUNCTIONS (no screen access, so the self-test can check them)
+   ===================================================================== */
+/* PURE-START */
+
+function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+function round2(v) { return Math.round(v * 100) / 100; }
+function baseName(p) { return String(p || "").split(/[\\/]/).pop().toLowerCase(); }
+
+/* Area where two boxes overlap (0 if they do not touch) */
+function overlapArea(a, b) {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return ix * iy;
+}
+
+/* IoU = overlap area / combined area. 1 = same box, 0 = no overlap. */
+function iou(a, b) {
+  const inter = overlapArea(a, b);
+  const union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+/* Seeded random numbers: the same seed always gives the same sequence */
+function mulberry32(seed) {
+  let a = seed | 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Shuffle a copy of a list using the seeded random function */
+function shuffleWith(list, rng) {
+  const out = list.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/* Pick a label that is different from the given one */
+function otherLabel(label, rng) {
+  const options = LABELS.filter((l) => l !== label);
+  return options[Math.floor(rng() * options.length)];
+}
+
+/* Move a box so that it stays fully inside the image */
+function clampInside(b, W, H) {
+  return { label: b.label, x: clamp(b.x, 0, Math.max(0, W - b.w)), y: clamp(b.y, 0, Math.max(0, H - b.h)), w: b.w, h: b.h };
+}
+
+/* PLANTED ERROR: move the box far from the object (IoU well below 0.5) */
+function shiftBox(b, W, H, rng) {
+  const options = [];
+  [1, -1].forEach((sx) => [1, -1].forEach((sy) => {
+    const nb = clampInside({ label: b.label, x: b.x + sx * 0.45 * b.w, y: b.y + sy * 0.35 * b.h, w: b.w, h: b.h }, W, H);
+    options.push({ nb, v: iou(b, nb) });
+  }));
+  const pick = options[Math.floor(rng() * options.length)];
+  if (pick.v < 0.5) return pick.nb;
+  options.sort((p, q) => p.v - q.v);          // the image edge blocked this shift, so use the best one
+  return options[0].nb;
+}
+
+/* PLANTED ERROR: make the box much too big around the object (IoU about 0.4 or less) */
+function loosenBox(b, W, H) {
+  let result = b;
+  for (const s of [1.6, 1.9, 2.2, 2.6]) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const x0 = Math.max(0, cx - (b.w * s) / 2), x1 = Math.min(W, cx + (b.w * s) / 2);
+    const y0 = Math.max(0, cy - (b.h * s) / 2), y1 = Math.min(H, cy + (b.h * s) / 2);
+    result = { label: b.label, x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    if (iou(b, result) <= 0.6) break;         // loose enough
+  }
+  return result;
+}
+
+/* PLANTED ERROR: a second box on the same object, moved by a few percent */
+function jitterCopy(t, W, H, rng) {
+  const dx = (rng() - 0.5) * 0.08 * t.w;
+  const dy = (rng() - 0.5) * 0.08 * t.h;
+  return clampInside({ label: t.label, x: t.x + dx, y: t.y + dy, w: t.w * 0.98, h: t.h * 0.98 }, W, H);
+}
+
+/* PLANTED ERROR: a box in an empty place where no true box touches. Returns null if there is no room. */
+function makeFalseAlarm(truth, W, H, rng) {
+  const median = (arr) => { const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const mw = median(truth.map((t) => t.w)), mh = median(truth.map((t) => t.h));
+  for (let tries = 0; tries < 500; tries++) {
+    const w = Math.min(W * 0.4, mw * (0.8 + rng() * 0.4));
+    const h = Math.min(H * 0.4, mh * (0.8 + rng() * 0.4));
+    const b = { label: LABELS[Math.floor(rng() * LABELS.length)], x: rng() * (W - w), y: rng() * (H - h), w, h };
+    if (truth.every((t) => overlapArea(b, t) === 0)) return b;
+  }
+  return null;
+}
+
+/* Make the practice set.
+   Input: the correct boxes. Output: AI boxes with planted errors, plus the answer key.
+   Planted errors (each on a different object): wrong label, missed object (box removed),
+   shifted box, duplicate box, too-loose box. One false alarm is added in an empty place. */
+function makePracticeSet(truth, W, H, seed) {
+  const rng = mulberry32(seed);
+  const order = shuffleWith(truth.map((_, i) => i), rng);
+  const plan = ["wrong_label", "missed", "bad_shift", "duplicate", "bad_loose"];
+  const typeOf = {};
+  plan.slice(0, truth.length).forEach((type, k) => { typeOf[order[k]] = type; });
+
+  const items = [];     // AI boxes before they get ids
+  const missed = [];    // true boxes that are removed from the AI set
+  truth.forEach((t, i) => {
+    const type = typeOf[i];
+    const copy = { label: t.label, x: t.x, y: t.y, w: t.w, h: t.h };
+    if (type === "missed") { missed.push(copy); return; }
+
+    let box = copy;
+    let planted = null;
+    if (type === "wrong_label") { box = Object.assign({}, copy, { label: otherLabel(t.label, rng) }); planted = type; }
+    if (type === "bad_shift")   { box = shiftBox(copy, W, H, rng); planted = type; }
+    if (type === "bad_loose")   { box = loosenBox(copy, W, H); planted = type; }
+    items.push({ box, planted, truth: copy, group: type === "duplicate" ? i : null });
+
+    if (type === "duplicate") {
+      items.push({ box: jitterCopy(copy, W, H, rng), planted: "duplicate", truth: copy, group: i });
+    }
+  });
+
+  const fa = makeFalseAlarm(truth, W, H, rng);
+  if (fa) items.push({ box: fa, planted: "false_alarm", truth: null, group: null });
+
+  // Shuffle, so the order of the boxes gives nothing away, then give ids
+  const shuffled = shuffleWith(items, rng);
+  const ai = shuffled.map((it, k) => ({
+    id: k + 1, label: it.box.label, x: it.box.x, y: it.box.y, w: it.box.w, h: it.box.h,
+    score: null, verdict: "", fixLabel: "", fixed: null
+  }));
+
+  // Answer key. It is kept apart from the AI boxes so nothing can leak into the screen.
+  const keyItems = [];
+  shuffled.forEach((it, k) => {
+    if (!it.planted) return;
+    const entry = { type: it.planted, aiId: k + 1, truth: it.truth };
+    if (it.planted === "duplicate") {
+      const origIndex = shuffled.findIndex((o) => o.group === it.group && o.planted === null);
+      entry.pairId = origIndex + 1;
+    }
+    keyItems.push(entry);
+  });
+  return { ai, key: { items: keyItems, missed, seed } };
+}
+
+/* Score a reviewer's work against the answer key.
+   A planted error counts as "caught" when the reviewer gave the matching verdict. */
+function scoreReview(ai, added, key) {
+  const byId = new Map(ai.map((b) => [b.id, b]));
+  const plantedIds = new Set();
+  const rows = [];
+  const usedAdded = new Set();
+  let caught = 0;
+
+  key.items.forEach((k) => {
+    plantedIds.add(k.aiId);
+    if (k.pairId) plantedIds.add(k.pairId);
+    const box = byId.get(k.aiId);
+    const got = box.verdict || "";
+    let ok = false, note = "";
+
+    if (k.type === "wrong_label") {
+      ok = got === "wrong_label";
+      if (ok) {
+        if (box.fixLabel === k.truth.label) note = "The corrected label is right.";
+        else if (box.fixLabel) note = `The corrected label is ${box.fixLabel}, but it should be ${k.truth.label}.`;
+        else note = "No corrected label was chosen.";
+      }
+    } else if (k.type === "bad_shift" || k.type === "bad_loose") {
+      ok = got === "bad_box";
+      if (ok) {
+        note = box.fixed ? `Your fixed box has IoU ${iou(box.fixed, k.truth).toFixed(2)} with the true box.` : "The box was not adjusted.";
+      }
+    } else if (k.type === "false_alarm") {
+      ok = got === "false_alarm";
+    } else if (k.type === "duplicate") {
+      // Exactly one box of the pair must be marked Duplicate. Marking both removes the object.
+      const orig = byId.get(k.pairId);
+      const copyDup = got === "duplicate";
+      const origDup = !!orig && orig.verdict === "duplicate";
+      ok = copyDup !== origDup;
+      if (copyDup && origDup) note = "Both boxes were marked Duplicate. One of them must stay.";
+    }
+    if (ok) caught++;
+    rows.push({ type: k.type, aiId: k.aiId, verdict: got, ok, note });
+  });
+
+  // Missed objects: the reviewer must have added a box with the right label that overlaps it
+  key.missed.forEach((m) => {
+    let best = 0, bestBox = null;
+    added.forEach((a) => {
+      if (a.label !== m.label || usedAdded.has(a.id)) return;
+      const v = iou(a, m);
+      if (v > best) { best = v; bestBox = a; }
+    });
+    const ok = best >= MATCH_IOU;
+    if (ok) { caught++; usedAdded.add(bestBox.id); }
+    rows.push({
+      type: "missed", aiId: null, verdict: ok ? "added a box" : "not found", ok,
+      note: ok ? `Your added box has IoU ${best.toFixed(2)} with the missed object.` : `No added ${m.label} box matches it.`
+    });
+  });
+
+  // Boxes that were fine: how many did the reviewer wrongly flag?
+  let correctTotal = 0, falseFlags = 0, notReviewed = 0;
+  ai.forEach((b) => {
+    if (!b.verdict) notReviewed++;
+    if (plantedIds.has(b.id)) return;
+    correctTotal++;
+    if (b.verdict && b.verdict !== "correct") falseFlags++;
+  });
+  const extraAdded = added.filter((a) => !usedAdded.has(a.id)).length;
+
+  return { total: key.items.length + key.missed.length, caught, rows, correctTotal, falseFlags, notReviewed, extraAdded };
+}
+
+/* Read AI boxes (or correct boxes) from a COCO file.
+   Accepts a full COCO file (images + annotations + categories) or a results list
+   like [{ image_id, category_id, bbox, score }]. Only my five labels are kept.
+   Returns { ok, boxes, refWidth, refHeight, imageName, ignored, crowdSkipped, note } or { ok:false, message }. */
+function parseDetections(data, fileName) {
+  const labelOfCat = {};
+  let list, imageName = null, refWidth = null, refHeight = null, note = "";
+
+  if (Array.isArray(data)) {
+    // A results list. It has no image names, so the image is found by its id.
+    const ids = [];
+    data.forEach((d) => { if (d && ids.indexOf(d.image_id) === -1) ids.push(d.image_id); });
+    if (!ids.length) return { ok: false, message: "This file has no boxes in it." };
+    let imageId;
+    if (ids.length === 1) {
+      imageId = ids[0];
+    } else {
+      const digits = (baseName(fileName).match(/\d+/) || [""])[0];
+      const num = parseInt(digits, 10);
+      if (ids.indexOf(num) !== -1) imageId = num;
+      else return { ok: false, message: `This file has boxes for ${ids.length} images and I cannot tell which one is yours. Use a file for one image, or a full COCO file that has an images list.` };
+    }
+    list = data.filter((d) => d && d.image_id === imageId);
+    Object.keys(ID_TO_LABEL).forEach((id) => { labelOfCat[id] = ID_TO_LABEL[id]; });
+    note = "This file has no image size, so I assumed it is the same as your image.";
+  } else if (data && Array.isArray(data.images) && Array.isArray(data.annotations) && Array.isArray(data.categories)) {
+    const wanted = baseName(fileName);
+    let img = data.images.find((i) => baseName(i.file_name) === wanted);
+    if (!img) {
+      if (data.images.length === 1) {
+        img = data.images[0];
+        note = `The file has only one image, so I used it. Its name (“${img.file_name}”) is different from yours.`;
+      } else {
+        const sample = data.images.slice(0, 3).map((i) => i.file_name).join(", ");
+        return { ok: false, message: `No image in this file is named “${fileName}”. The file has ${data.images.length} images, for example: ${sample}.` };
+      }
+    }
+    imageName = img.file_name;
+    refWidth = Number(img.width);
+    refHeight = Number(img.height);
+    data.categories.forEach((c) => {
+      const hit = LABELS.find((l) => l.toLowerCase() === String(c.name).toLowerCase());
+      if (hit) labelOfCat[c.id] = hit;
+    });
+    list = data.annotations.filter((a) => a && a.image_id === img.id);
+  } else {
+    return { ok: false, message: "This does not look like a COCO file. It needs “images”, “annotations” and “categories”, or it must be a list of boxes with image_id, category_id and bbox." };
+  }
+
+  const boxes = [];
+  let ignored = 0, crowdSkipped = 0;
+  list.forEach((d) => {
+    const label = labelOfCat[d.category_id];
+    if (!label) { ignored++; return; }                    // not one of my five labels
+    if (d.iscrowd) { crowdSkipped++; return; }
+    const bb = d.bbox;
+    const valid = Array.isArray(bb) && bb.length === 4 && bb.every((v) => typeof v === "number" && isFinite(v));
+    if (!valid || bb[2] <= 0 || bb[3] <= 0) return;
+    boxes.push({ label, x: bb[0], y: bb[1], w: bb[2], h: bb[3], score: typeof d.score === "number" ? d.score : null });
+  });
+  return { ok: true, boxes, refWidth, refHeight, imageName, ignored, crowdSkipped, note };
+}
+
+/* The corrected set of boxes after the review:
+   duplicates and false alarms are removed, wrong labels and bad boxes are fixed, added boxes are included. */
+function buildCorrectedBoxes(ai, added) {
+  const out = [];
+  ai.forEach((b) => {
+    if (b.verdict === "duplicate" || b.verdict === "false_alarm") return;
+    const g = b.verdict === "bad_box" && b.fixed ? b.fixed : b;
+    const label = b.verdict === "wrong_label" && b.fixLabel ? b.fixLabel : b.label;
+    out.push({ label, x: g.x, y: g.y, w: g.w, h: g.h });
+  });
+  added.forEach((a) => out.push({ label: a.label, x: a.x, y: a.y, w: a.w, h: a.h }));
+  return out.map((b, i) => Object.assign({ id: i + 1 }, b));
+}
+
+/* Make a COCO file. COCO bbox = [x, y, width, height] in pixels. */
+function buildCoco(image, boxes) {
+  return {
+    info: {
+      description: "Made with the AI Box Review Tool. Practice output, not a certified accuracy result.",
+      date_created: new Date().toISOString()
+    },
+    images: [{ id: 1, file_name: image.name, width: image.width, height: image.height }],
+    categories: LABELS.map((l) => ({ id: COCO_IDS[l], name: l.toLowerCase(), supercategory: COCO_SUPER[l] })),
+    annotations: boxes.map((b) => ({
+      id: b.id, image_id: 1, category_id: COCO_IDS[b.label],
+      bbox: [round2(b.x), round2(b.y), round2(b.w), round2(b.h)],
+      area: round2(b.w * b.h), iscrowd: 0
+    }))
+  };
+}
+
+/* Count the verdicts */
+function countVerdicts(ai) {
+  const counts = { correct: 0, wrong_label: 0, bad_box: 0, duplicate: 0, false_alarm: 0, not_reviewed: 0 };
+  ai.forEach((b) => { counts[b.verdict || "not_reviewed"]++; });
+  return counts;
+}
+
+/* Things the reviewer has not finished yet (used for warnings before export) */
+function reviewWarnings(ai) {
+  const w = [];
+  const open = ai.filter((b) => !b.verdict).length;
+  const noLabel = ai.filter((b) => b.verdict === "wrong_label" && !b.fixLabel).length;
+  const noFix = ai.filter((b) => b.verdict === "bad_box" && !b.fixed).length;
+  if (open) w.push(`${open} AI box${open === 1 ? " is" : "es are"} not reviewed.`);
+  if (noLabel) w.push(`${noLabel} Wrong label box${noLabel === 1 ? " has" : "es have"} no corrected label.`);
+  if (noFix) w.push(`${noFix} Bad box${noFix === 1 ? " was" : "es were"} not adjusted.`);
+  return w;
+}
+
+/* Prepare one CSV cell: quote it, double any quotes inside, and block spreadsheet formulas */
+function csvCell(value) {
+  let s = String(value === null || value === undefined ? "" : value);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* PURE-END */
+
+/* =====================================================================
+   FILES AND DATA
+   ===================================================================== */
+
+function setStatus(msg, isError = false) {
+  els.status.textContent = msg;
+  els.status.classList.toggle("error", isError);
+}
+
+function minSize() {
+  return Math.max(4, Math.round(Math.min(state.image.width, state.image.height) * 0.01));
+}
+
+/* Scale boxes when the file's image size differs from the uploaded image */
+function scaleToImage(boxes, refWidth, refHeight) {
+  const W = state.image.width, H = state.image.height;
+  if (!(refWidth > 0 && refHeight > 0) || (refWidth === W && refHeight === H)) return { boxes, note: "" };
+  const sx = W / refWidth, sy = H / refHeight;
+  const shapeDiffers = Math.abs((W / H) / (refWidth / refHeight) - 1) > 0.01;
+  const note = shapeDiffers
+    ? `Warning: your image shape (${W} × ${H}) differs from the file (${refWidth} × ${refHeight}). It may be a different or cropped image.`
+    : `Your image size (${W} × ${H}) differs from the file (${refWidth} × ${refHeight}), so the boxes were scaled.`;
+  return { boxes: boxes.map((b) => Object.assign({}, b, { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy })), note };
+}
+
+/* Read a JSON file. Returns null (and shows a message) if it is not valid JSON. */
+async function readJson(file) {
+  try {
+    return JSON.parse(await file.text());
+  } catch (err) {
+    setStatus("This file is not valid JSON.", true);
+    return null;
+  }
+}
+
+/* Put new boxes into the review */
+function startReview(ai, mode, source, key, seed) {
+  state.ai = ai;
+  state.added = [];
+  state.nextAddedId = 1;
+  state.selected = null;
+  state.mode = mode;
+  state.source = source;
+  state.key = key;
+  state.seed = seed || 1;
+  state.scoreShown = false;
+  renderAll();
+}
+
+/* Option 2a: review boxes made by an AI model */
+async function loadAiFile(file) {
+  if (!state.image) { setStatus("Upload your image first.", true); return; }
+  setStatus("Reading file…");
+  const data = await readJson(file);
+  if (!data) return;
+  const out = parseDetections(data, state.image.name);
+  if (!out.ok) { setStatus(out.message, true); return; }
+  const scaled = scaleToImage(out.boxes, out.refWidth, out.refHeight);
+  if (!scaled.boxes.length) { setStatus("This file has no boxes for the five labels on this image.", true); return; }
+
+  const ai = scaled.boxes.map((b, i) => ({
+    id: i + 1, label: b.label, x: b.x, y: b.y, w: b.w, h: b.h, score: b.score, verdict: "", fixLabel: "", fixed: null
+  }));
+  startReview(ai, "review", file.name, null, 1);
+  const notes = [out.note, scaled.note].filter(Boolean).join(" ");
+  setStatus(`Loaded ${ai.length} AI box${ai.length === 1 ? "" : "es"}. ${out.ignored ? out.ignored + " with other labels were ignored. " : ""}${notes}`.trim());
+}
+
+/* Option 2b: make a practice set from a file with the correct boxes */
+async function loadTruthFile(file) {
+  if (!state.image) { setStatus("Upload your image first.", true); return; }
+  setStatus("Reading file…");
+  const data = await readJson(file);
+  if (!data) return;
+  const out = parseDetections(data, state.image.name);
+  if (!out.ok) { setStatus(out.message, true); return; }
+  const scaled = scaleToImage(out.boxes, out.refWidth, out.refHeight);
+  if (scaled.boxes.length < 2) { setStatus("A practice set needs at least 2 correct boxes on this image. 5 or more is better.", true); return; }
+
+  const seed = clamp(Math.round(Number(els.seed.value)) || 1, 1, 999999);
+  els.seed.value = seed;
+  const set = makePracticeSet(scaled.boxes, state.image.width, state.image.height, seed);
+  startReview(set.ai, "practice", file.name, set.key, seed);
+  const planted = set.key.items.length + set.key.missed.length;
+  const notes = [out.note, scaled.note].filter(Boolean).join(" ");
+  setStatus(`Practice set ${seed} is ready: ${set.ai.length} AI boxes, ${planted} planted errors. ${notes}`.trim());
+}
+
+/* ---------- Image upload ---------- */
+function loadImage(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) { setStatus("That file is not an image.", true); return; }
+  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+  currentObjectUrl = URL.createObjectURL(file);
+
+  els.img.onload = () => {
+    state.image = { name: file.name, width: els.img.naturalWidth, height: els.img.naturalHeight };
+    state.ai = []; state.added = []; state.selected = null; state.mode = null; state.key = null; state.scoreShown = false;
+    els.emptyState.style.display = "none";
+    els.canvas.classList.add("show");
+    setStatus(`Loaded “${file.name}” (${state.image.width} × ${state.image.height} px). Now load AI boxes or make a practice set.`);
+    renderAll();
+  };
+  els.img.onerror = () => setStatus("This image could not be opened.", true);
+  els.img.src = currentObjectUrl;
+}
+
+/* =====================================================================
+   REVIEW ACTIONS
+   ===================================================================== */
+
+function getItem(kind, id) {
+  return (kind === "ai" ? state.ai : state.added).find((b) => b.id === id);
+}
+function isSelected(kind, id) { return !!state.selected && state.selected.kind === kind && state.selected.id === id; }
+function currentItem() { return state.selected ? getItem(state.selected.kind, state.selected.id) : null; }
+
+/* The box as it is drawn now (a fixed box replaces the AI box) */
+function geomOf(kind, item) { return kind === "ai" && item.fixed ? item.fixed : item; }
+
+/* Can this box be moved or resized? Added boxes, and AI boxes marked Bad box. */
+function isEditable(kind, item) { return kind === "added" || (kind === "ai" && item.verdict === "bad_box"); }
+
+function select(kind, id) {
+  state.selected = { kind, id };
+  renderAll();
+}
+
+function setVerdict(id, verdict) {
+  const b = getItem("ai", id);
+  if (!b) return;
+  b.verdict = verdict;
+  if (verdict !== "wrong_label") b.fixLabel = "";
+  if (verdict !== "bad_box") b.fixed = null;
+  // After a quick verdict, move on to the next box that is not reviewed yet
+  if (verdict && verdict !== "wrong_label" && verdict !== "bad_box") {
+    const start = state.ai.findIndex((x) => x.id === id);
+    for (let step = 1; step <= state.ai.length; step++) {
+      const next = state.ai[(start + step) % state.ai.length];
+      if (!next.verdict) { state.selected = { kind: "ai", id: next.id }; break; }
+    }
+  }
+  renderAll();
+}
+
+function deleteAdded(id) {
+  state.added = state.added.filter((a) => a.id !== id);
+  if (isSelected("added", id)) state.selected = null;
+  renderAll();
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+function renderAll() {
+  updateButtons();
+  renderBoxes();
+  renderReviewPanel();
+  renderLists();
+  renderPractice();
+  updateExport();
+}
+
+/* Box position and size in % of the original image size */
+function applyGeometry(el, g) {
+  const { width: W, height: H } = state.image;
+  el.style.left = (g.x / W) * 100 + "%";
+  el.style.top = (g.y / H) * 100 + "%";
+  el.style.width = (g.w / W) * 100 + "%";
+  el.style.height = (g.h / H) * 100 + "%";
+  if (g.y / H < 0.06) el.classList.add("top-edge"); // keep the tag inside the image
+}
+
+function tagText(kind, item) {
+  if (kind === "added") return `+${item.id} · ${item.label}`;
+  let text = `${item.id} · ${item.label}`;
+  if (item.verdict === "wrong_label" && item.fixLabel) text += ` → ${item.fixLabel}`;
+  if (item.verdict) text += ` · ${VERDICT_TEXT[item.verdict]}`;
+  if (state.scoreShown && state.key) {
+    const k = state.key.items.find((x) => x.aiId === item.id);
+    if (k) text += ` · planted: ${PLANTED_TEXT[k.type].toLowerCase()}`;
+  }
+  return text;
+}
+
+function createBoxEl(kind, item, isDraft = false) {
+  const el = document.createElement("div");
+  const verdict = kind === "added" ? "added" : (item.verdict || "none");
+  el.className = "box" + (isDraft ? " draft" : "") + (isSelected(kind, item.id) ? " selected" : "") +
+                 (isEditable(kind, item) ? " editable" : "");
+  el.dataset.kind = kind;
+  el.dataset.id = item.id;
+  el.dataset.v = isDraft ? "added" : verdict;
+  applyGeometry(el, geomOf(kind, item));
+
+  const tag = document.createElement("span");
+  tag.className = "tag";
+  tag.textContent = isDraft ? item.label : tagText(kind, item);
+  el.appendChild(tag);
+
+  // Resize handles on the selected box, when it can be edited
+  if (!isDraft && isSelected(kind, item.id) && isEditable(kind, item)) {
+    ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((h) => {
+      const hd = document.createElement("span");
+      hd.className = "handle";
+      hd.dataset.h = h;
+      el.appendChild(hd);
+    });
+  }
+  return el;
+}
+
+function renderBoxes() {
+  els.overlay.innerHTML = "";
+  if (!state.image) return;
+
+  // After "Check my review": show the objects the AI missed (from the answer key)
+  if (state.scoreShown && state.key) {
+    state.key.missed.forEach((m) => {
+      const el = document.createElement("div");
+      el.className = "key-missed";
+      applyGeometry(el, m);
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = `Missed · ${m.label}`;
+      el.appendChild(tag);
+      els.overlay.appendChild(el);
+    });
+  }
+
+  state.ai.forEach((b) => {
+    if (b.verdict === "bad_box" && b.fixed) {          // show where the AI box was
+      const ghost = document.createElement("div");
+      ghost.className = "ghost";
+      applyGeometry(ghost, b);
+      els.overlay.appendChild(ghost);
+    }
+    els.overlay.appendChild(createBoxEl("ai", b));
+  });
+  state.added.forEach((a) => els.overlay.appendChild(createBoxEl("added", a)));
+}
+
+/* Progress, selected box, and verdict buttons */
+function renderReviewPanel() {
+  const total = state.ai.length;
+  const reviewed = state.ai.filter((b) => b.verdict).length;
+  els.progressBar.style.width = total ? (reviewed / total) * 100 + "%" : "0";
+  els.progressText.textContent = total ? `Reviewed ${reviewed} of ${total} AI boxes` : "";
+
+  if (!state.mode) els.modeLine.textContent = state.image ? "Load AI boxes or make a practice set." : "Upload an image to start.";
+  else if (state.mode === "practice") els.modeLine.textContent = `Practice set ${state.seed} · from ${state.source}`;
+  else els.modeLine.textContent = `Reviewing AI boxes from ${state.source}`;
+
+  // Verdict buttons (built once, then updated)
+  if (!els.verdicts.children.length) {
+    VERDICTS.forEach((v, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.v = v.key;
+      btn.style.setProperty("--vc", `var(--v-${v.key})`);
+      btn.innerHTML = `<kbd>${i + 1}</kbd>`;
+      btn.append(v.text);
+      btn.addEventListener("click", () => {
+        const item = currentItem();
+        if (item && state.selected.kind === "ai") setVerdict(item.id, v.key);
+      });
+      els.verdicts.appendChild(btn);
+    });
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "clear";
+    clear.dataset.v = "";
+    clear.textContent = "0 Clear verdict";
+    clear.addEventListener("click", () => {
+      const item = currentItem();
+      if (item && state.selected.kind === "ai") setVerdict(item.id, "");
+    });
+    els.verdicts.appendChild(clear);
+  }
+
+  const item = currentItem();
+  const isAi = !!item && state.selected.kind === "ai";
+  Array.from(els.verdicts.children).forEach((btn) => {
+    btn.disabled = !isAi;
+    btn.classList.toggle("active", isAi && btn.dataset.v !== "" && item.verdict === btn.dataset.v);
+  });
+
+  els.labelRow.hidden = true;
+  els.addedRow.hidden = true;
+  if (!item) {
+    els.selectedInfo.textContent = state.ai.length ? "Select a box on the image or in the list." : "";
+  } else if (isAi) {
+    const conf = item.score !== null ? ` · AI confidence ${Math.round(item.score * 100)}%` : "";
+    els.selectedInfo.textContent = `AI box ${item.id} · ${item.label}${conf}`;
+    if (item.verdict === "wrong_label") {
+      els.labelRow.hidden = false;
+      els.fixLabelText.textContent = "Correct label";
+      els.fixLabel.innerHTML = `<option value="">Choose…</option>` +
+        LABELS.filter((l) => l !== item.label).map((l) => `<option value="${l}">${l}</option>`).join("");
+      els.fixLabel.value = item.fixLabel;
+    } else if (item.verdict === "bad_box") {
+      els.selectedInfo.textContent += " · drag the box or its handles to fix it";
+    }
+  } else {
+    els.selectedInfo.textContent = `Added box ${item.id} · drag to move, drag a handle to resize`;
+    els.labelRow.hidden = false;
+    els.addedRow.hidden = false;
+    els.fixLabelText.textContent = "Label";
+    els.fixLabel.innerHTML = LABELS.map((l) => `<option value="${l}">${l}</option>`).join("");
+    els.fixLabel.value = item.label;
+  }
+}
+
+function verdictBadge(b) {
+  if (!b.verdict) return "Not reviewed";
+  return VERDICT_TEXT[b.verdict] + (b.verdict === "wrong_label" && b.fixLabel ? ` → ${b.fixLabel}` : "");
+}
+
+function renderLists() {
+  els.aiList.innerHTML = "";
+  els.aiCount.textContent = state.ai.length;
+  els.aiEmpty.style.display = state.ai.length ? "none" : "block";
+  state.ai.forEach((b) => {
+    const li = document.createElement("li");
+    li.className = "row" + (isSelected("ai", b.id) ? " selected" : "");
+    li.dataset.v = b.verdict || "none";
+    li.addEventListener("click", () => select("ai", b.id));
+    const main = document.createElement("span");
+    main.textContent = `#${b.id} ${b.label}` + (b.score !== null ? ` · ${Math.round(b.score * 100)}%` : "");
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = verdictBadge(b);
+    li.append(main, badge);
+    els.aiList.appendChild(li);
+  });
+
+  els.addedList.innerHTML = "";
+  els.addedCount.textContent = state.added.length;
+  els.addedEmpty.style.display = state.added.length ? "none" : "block";
+  state.added.forEach((a) => {
+    const li = document.createElement("li");
+    li.className = "row" + (isSelected("added", a.id) ? " selected" : "");
+    li.dataset.v = "added";
+    li.addEventListener("click", () => select("added", a.id));
+    const main = document.createElement("span");
+    main.textContent = `+${a.id} ${a.label}`;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", `Delete added box ${a.id}`);
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteAdded(a.id); });
+    li.append(main, del);
+    els.addedList.appendChild(li);
+  });
+}
+
+/* Practice score panel */
+function renderPractice() {
+  const show = state.mode === "practice" && !!state.key;
+  els.practicePanel.hidden = !show;
+  if (!show) return;
+
+  els.scoreBox.innerHTML = "";
+  if (!state.scoreShown) return;
+
+  const s = scoreReview(state.ai, state.added, state.key);
+  const box = els.scoreBox;
+
+  const big = document.createElement("div");
+  big.className = "score-big";
+  big.textContent = `Caught ${s.caught} of ${s.total} planted errors`;
+  box.appendChild(big);
+
+  const stats = document.createElement("dl");
+  stats.className = "stats";
+  const addStat = (name, value) => {
+    const dt = document.createElement("dt"); dt.textContent = name;
+    const dd = document.createElement("dd"); dd.textContent = value;
+    stats.append(dt, dd);
+  };
+  addStat("Correct boxes wrongly flagged", `${s.falseFlags} of ${s.correctTotal}`);
+  addStat("AI boxes not reviewed", s.notReviewed);
+  addStat("Added boxes that match nothing", s.extraAdded);
+  box.appendChild(stats);
+
+  const list = document.createElement("ul");
+  list.className = "result-list";
+  s.rows.forEach((r) => {
+    const li = document.createElement("li");
+    const mark = document.createElement("span");
+    mark.className = r.ok ? "ok" : "no";
+    mark.textContent = r.ok ? "Caught" : "Missed";
+    const where = r.aiId ? `box ${r.aiId}` : "no box in the AI set";
+    li.append(mark, ` · ${PLANTED_TEXT[r.type]} (${where})`);
+    const small = document.createElement("small");
+    small.textContent = `Your answer: ${r.verdict ? (VERDICT_TEXT[r.verdict] || r.verdict) : "no verdict"}.` + (r.note ? " " + r.note : "");
+    li.appendChild(small);
+    list.appendChild(li);
+  });
+  box.appendChild(list);
+
+  const note = document.createElement("p");
+  note.className = "notice";
+  note.textContent = "The planted errors are now shown on the image. Try a new seed to practice again.";
+  box.appendChild(note);
+}
+
+els.checkBtn.addEventListener("click", () => {
+  state.scoreShown = true;
+  renderAll();
+});
+
+/* =====================================================================
+   EXPORT
+   ===================================================================== */
+
+function exportRowsAi() {
+  return state.ai.map((b) => ({
+    id: b.id, label: b.label, score: b.score,
+    bbox: { x: round2(b.x), y: round2(b.y), width: round2(b.w), height: round2(b.h) },
+    verdict: b.verdict || "not_reviewed",
+    correctedLabel: b.verdict === "wrong_label" && b.fixLabel ? b.fixLabel : null,
+    correctedBbox: b.verdict === "bad_box" && b.fixed
+      ? { x: round2(b.fixed.x), y: round2(b.fixed.y), width: round2(b.fixed.w), height: round2(b.fixed.h) } : null
+  }));
+}
+
+function buildReport() {
+  const report = {
+    tool: "AI Box Review Tool",
+    note: "Educational practice output. Not a certified accuracy evaluation.",
+    exportedAt: new Date().toISOString(),
+    image: state.image ? { fileName: state.image.name, width: state.image.width, height: state.image.height } : null,
+    mode: state.mode,
+    source: state.source,
+    bboxFormat: "x, y, width, height in original image pixels. Origin is the top-left corner.",
+    summary: Object.assign({ aiBoxes: state.ai.length, added: state.added.length }, countVerdicts(state.ai)),
+    aiBoxes: exportRowsAi(),
+    addedBoxes: state.added.map((a) => ({
+      id: a.id, label: a.label,
+      bbox: { x: round2(a.x), y: round2(a.y), width: round2(a.w), height: round2(a.h) }
+    }))
+  };
+  if (state.mode === "practice" && state.scoreShown && state.key) {
+    const s = scoreReview(state.ai, state.added, state.key);
+    report.practice = {
+      seed: state.seed,
+      plantedErrors: s.total, caught: s.caught,
+      correctBoxesWronglyFlagged: s.falseFlags, correctBoxesTotal: s.correctTotal,
+      results: s.rows.map((r) => ({ planted: PLANTED_TEXT[r.type], aiBoxId: r.aiId, yourVerdict: r.verdict || "none", caught: r.ok, note: r.note }))
+    };
+  }
+  return report;
+}
+
+function buildReportCsv() {
+  const header = ["row_type", "id", "label", "x", "y", "width", "height", "ai_score", "verdict",
+                  "corrected_label", "corrected_x", "corrected_y", "corrected_width", "corrected_height"];
+  const lines = [header.join(",")];
+  exportRowsAi().forEach((r) => {
+    const c = r.correctedBbox || {};
+    lines.push(["ai", r.id, r.label, r.bbox.x, r.bbox.y, r.bbox.width, r.bbox.height, r.score,
+                r.verdict, r.correctedLabel, c.x, c.y, c.width, c.height].map(csvCell).join(","));
+  });
+  state.added.forEach((a) => {
+    lines.push(["added", a.id, a.label, round2(a.x), round2(a.y), round2(a.w), round2(a.h), "", "added_by_reviewer", "", "", "", "", ""]
+      .map(csvCell).join(","));
+  });
+  return lines.join("\r\n");
+}
+
+function currentExportText() {
+  const f = els.exportFormat.value;
+  if (f === "report-csv") return buildReportCsv();
+  if (f === "corrected-coco") return JSON.stringify(buildCoco(state.image, buildCorrectedBoxes(state.ai, state.added)), null, 2);
+  return JSON.stringify(buildReport(), null, 2);
+}
+
+function updateExport() {
+  const ready = !!state.image && state.ai.length > 0;
+  els.downloadBtn.disabled = !ready;
+  els.copyBtn.disabled = !ready;
+  els.preview.textContent = ready ? currentExportText() : "Nothing to export yet.";
+  const warnings = ready ? reviewWarnings(state.ai) : [];
+  els.exportStatus.textContent = warnings.length ? warnings.join(" ") : "";
+}
+els.exportFormat.addEventListener("change", updateExport);
+
+els.downloadBtn.addEventListener("click", () => {
+  try {
+    const f = els.exportFormat.value;
+    const isCsv = f === "report-csv";
+    const text = (isCsv ? "\uFEFF" : "") + currentExportText();     // the BOM helps Excel read UTF-8
+    const blob = new Blob([text], { type: isCsv ? "text/csv;charset=utf-8" : "application/json" });
+    const url = URL.createObjectURL(blob);
+    const stem = state.image.name.replace(/\.[^.]+$/, "");
+    const suffix = { "report-json": "-review.json", "report-csv": "-review.csv", "corrected-coco": "-corrected-coco.json" }[f];
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = stem + suffix;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    els.exportStatus.textContent = "Download started. If nothing happens, use Copy instead.";
+  } catch (err) {
+    els.exportStatus.textContent = "Download is blocked here. Use Copy instead.";
+  }
+});
+
+els.copyBtn.addEventListener("click", async () => {
+  const text = currentExportText();
+  try {
+    await navigator.clipboard.writeText(text);
+    els.exportStatus.textContent = "Copied.";
+  } catch (err) {
+    const ta = document.createElement("textarea");   // fallback for browsers that block the clipboard API
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+    ta.remove();
+    els.exportStatus.textContent = ok ? "Copied." : "Copy is blocked. Open “Preview” and copy the text by hand.";
+  }
+});
+
+/* =====================================================================
+   MOUSE, TOUCH AND KEYBOARD
+   ===================================================================== */
+
+function pointerToImage(e) {
+  const rect = els.overlay.getBoundingClientRect();
+  return {
+    x: clamp(((e.clientX - rect.left) / rect.width) * state.image.width, 0, state.image.width),
+    y: clamp(((e.clientY - rect.top) / rect.height) * state.image.height, 0, state.image.height)
+  };
+}
+
+/* Make sure an AI box has its own "fixed" copy before it is moved or resized */
+function ensureFixed(kind, item) {
+  if (kind === "ai" && !item.fixed) item.fixed = { x: item.x, y: item.y, w: item.w, h: item.h };
+}
+
+els.overlay.addEventListener("pointerdown", (e) => {
+  if (!state.image || e.button > 0) return;
+  e.preventDefault();
+  els.overlay.focus({ preventScroll: true });
+  els.overlay.setPointerCapture(e.pointerId);
+
+  const p = pointerToImage(e);
+  const handleEl = e.target.closest(".handle");
+  const boxEl = e.target.closest(".box");
+
+  if (boxEl) {
+    const kind = boxEl.dataset.kind;
+    const item = getItem(kind, Number(boxEl.dataset.id));
+    state.selected = { kind, id: item.id };
+    if (isEditable(kind, item)) {
+      ensureFixed(kind, item);
+      const g = geomOf(kind, item);
+      drag = { type: handleEl ? "resize" : "move", kind, item, handle: handleEl ? handleEl.dataset.h : null, start: p, orig: { x: g.x, y: g.y, w: g.w, h: g.h } };
+    }
+    renderAll();
+  } else {
+    // Start drawing a box the AI missed
+    state.selected = null;
+    drag = { type: "draw", start: p, current: p };
+    renderAll();
+  }
+});
+
+els.overlay.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const p = pointerToImage(e);
+  const { width: W, height: H } = state.image;
+  const min = minSize();
+
+  if (drag.type === "draw") {
+    drag.current = p;
+    renderBoxes();
+    els.overlay.appendChild(createBoxEl("added", draftFromDrag(), true));
+  } else if (drag.type === "move") {
+    const g = geomOf(drag.kind, drag.item);
+    g.x = clamp(drag.orig.x + (p.x - drag.start.x), 0, W - g.w);
+    g.y = clamp(drag.orig.y + (p.y - drag.start.y), 0, H - g.h);
+    renderBoxes();
+  } else if (drag.type === "resize") {
+    const g = geomOf(drag.kind, drag.item);
+    const o = drag.orig;
+    let left = o.x, right = o.x + o.w, top = o.y, bottom = o.y + o.h;
+    if (drag.handle.includes("w")) left = Math.min(p.x, right - min);
+    if (drag.handle.includes("e")) right = Math.max(p.x, left + min);
+    if (drag.handle.includes("n")) top = Math.min(p.y, bottom - min);
+    if (drag.handle.includes("s")) bottom = Math.max(p.y, top + min);
+    g.x = left; g.y = top; g.w = right - left; g.h = bottom - top;
+    renderBoxes();
+  }
+});
+
+function draftFromDrag() {
+  const a = drag.start, c = drag.current;
+  return { id: 0, label: els.labelSelect.value, x: Math.min(a.x, c.x), y: Math.min(a.y, c.y), w: Math.abs(c.x - a.x), h: Math.abs(c.y - a.y) };
+}
+
+function endDrag(e) {
+  if (!drag) return;
+  if (els.overlay.hasPointerCapture(e.pointerId)) els.overlay.releasePointerCapture(e.pointerId);
+  if (drag.type === "draw") {
+    const d = draftFromDrag();
+    if (d.w >= minSize() && d.h >= minSize()) {        // ignore accidental clicks
+      const box = { id: state.nextAddedId++, label: els.labelSelect.value, x: d.x, y: d.y, w: d.w, h: d.h };
+      state.added.push(box);
+      state.selected = { kind: "added", id: box.id };
+    }
+  }
+  drag = null;
+  renderAll();
+}
+els.overlay.addEventListener("pointerup", endDrag);
+els.overlay.addEventListener("pointercancel", endDrag);
+
+/* Keys 1 to 5 set a verdict, 0 clears it, Delete removes an added box, Escape deselects */
+document.addEventListener("keydown", (e) => {
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+  const item = currentItem();
+  if (!item) { return; }
+  if (state.selected.kind === "ai") {
+    if (e.key >= "1" && e.key <= "5") { setVerdict(item.id, VERDICTS[Number(e.key) - 1].key); }
+    if (e.key === "0") { setVerdict(item.id, ""); }
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    deleteAdded(item.id);
+  }
+  if (e.key === "Escape") { state.selected = null; renderAll(); }
+});
+
+/* The label select: corrected label for an AI box, or the label of an added box */
+els.fixLabel.addEventListener("change", () => {
+  const item = currentItem();
+  if (!item) return;
+  if (state.selected.kind === "ai") item.fixLabel = els.fixLabel.value;
+  else item.label = els.fixLabel.value;
+  renderAll();
+});
+els.deleteAdded.addEventListener("click", () => { if (state.selected && state.selected.kind === "added") deleteAdded(state.selected.id); });
+
+/* ---------- Buttons and file inputs ---------- */
+els.imgBtn.addEventListener("click", () => els.imgInput.click());
+els.imgInput.addEventListener("change", () => { loadImage(els.imgInput.files[0]); els.imgInput.value = ""; });
+els.aiBtn.addEventListener("click", () => els.aiInput.click());
+els.aiInput.addEventListener("change", async () => {
+  const f = els.aiInput.files[0]; els.aiInput.value = "";
+  if (f) await loadAiFile(f);
+});
+els.truthBtn.addEventListener("click", () => els.truthInput.click());
+els.truthInput.addEventListener("change", async () => {
+  const f = els.truthInput.files[0]; els.truthInput.value = "";
+  if (f) await loadTruthFile(f);
+});
+
+/* The two loading buttons need an image first */
+function updateButtons() {
+  const has = !!state.image;
+  els.aiBtn.disabled = !has;
+  els.truthBtn.disabled = !has;
+}
+
+/* =====================================================================
+   SELF-TEST: runs on page load. Each test has an answer that can be worked out by hand.
+   ===================================================================== */
+function runSelfTests() {
+  const approx = (a, b, tol = 0.0005) => Math.abs(a - b) < tol;
+  const box = (x, y, w, h, label = "Dog") => ({ label, x, y, w, h });
+
+  // 8 correct boxes in a 1000 x 800 image, spread out so that nothing touches
+  const truth8 = [];
+  for (let i = 0; i < 8; i++) {
+    truth8.push(box(40 + (i % 4) * 240, 40 + Math.floor(i / 4) * 360, 150, 200, LABELS[i % LABELS.length]));
+  }
+
+  /* A perfect reviewer: gives the right verdict to every planted error and fixes it */
+  function perfectReview(set, truth) {
+    const ai = JSON.parse(JSON.stringify(set.ai));
+    const planted = new Set();
+    set.key.items.forEach((k) => {
+      planted.add(k.aiId); if (k.pairId) planted.add(k.pairId);
+      const b = ai.find((x) => x.id === k.aiId);
+      if (k.type === "wrong_label") { b.verdict = "wrong_label"; b.fixLabel = k.truth.label; }
+      if (k.type === "bad_shift" || k.type === "bad_loose") { b.verdict = "bad_box"; b.fixed = { x: k.truth.x, y: k.truth.y, w: k.truth.w, h: k.truth.h }; }
+      if (k.type === "duplicate") { b.verdict = "duplicate"; }
+      if (k.type === "false_alarm") { b.verdict = "false_alarm"; }
+    });
+    ai.forEach((b) => { if (!b.verdict) b.verdict = "correct"; });
+    const added = set.key.missed.map((m, i) => ({ id: i + 1, label: m.label, x: m.x, y: m.y, w: m.w, h: m.h }));
+    return { ai, added };
+  }
+
+  const set = makePracticeSet(truth8, 1000, 800, 7);
+
+  const tests = [
+    ["IoU of two identical boxes is 1.000",
+      () => approx(iou(box(0, 0, 100, 100), box(0, 0, 100, 100)), 1)],
+
+    ["IoU of two boxes that do not touch is 0.000",
+      () => approx(iou(box(0, 0, 100, 100), box(300, 300, 100, 100)), 0)],
+
+    ["IoU of two 100 × 100 boxes shifted by 50 px is 0.333",
+      () => approx(iou(box(0, 0, 100, 100), box(50, 0, 100, 100)), 0.333)],
+
+    ["Same seed gives the same practice set",
+      () => JSON.stringify(makePracticeSet(truth8, 1000, 800, 7)) === JSON.stringify(set)],
+
+    ["A different seed gives a different practice set",
+      () => JSON.stringify(makePracticeSet(truth8, 1000, 800, 8)) !== JSON.stringify(set)],
+
+    ["8 correct boxes give 9 AI boxes and 6 planted errors (one removed, one duplicate and one false alarm added)",
+      () => set.ai.length === 9 && set.key.items.length + set.key.missed.length === 6 && set.key.missed.length === 1]
+    ,
+    ["Each planted error really is that error (label changed, IoU below 0.5, loose box, duplicate above 0.7, empty place)",
+      () => set.key.items.every((k) => {
+        const b = set.ai.find((x) => x.id === k.aiId);
+        if (k.type === "wrong_label") return b.label !== k.truth.label && iou(b, k.truth) > 0.99;
+        if (k.type === "bad_shift") return iou(b, k.truth) < 0.5;
+        if (k.type === "bad_loose") return iou(b, k.truth) <= 0.6 && iou(b, k.truth) > 0.2;
+        if (k.type === "duplicate") return iou(b, k.truth) > 0.7 && b.label === k.truth.label;
+        if (k.type === "false_alarm") return truth8.every((t) => overlapArea(b, t) === 0);
+        return false;
+      })],
+
+    ["A perfect review catches 6 of 6 and flags no correct box",
+      () => { const r = perfectReview(set, truth8); const s = scoreReview(r.ai, r.added, set.key);
+              return s.caught === 6 && s.total === 6 && s.falseFlags === 0 && s.notReviewed === 0 && s.extraAdded === 0; }],
+
+    ["A review with no verdicts catches 0 of 6",
+      () => { const s = scoreReview(JSON.parse(JSON.stringify(set.ai)), [], set.key);
+              return s.caught === 0 && s.notReviewed === set.ai.length; }],
+
+    ["Marking every box as False alarm catches only the real false alarm and flags all correct boxes",
+      () => { const ai = JSON.parse(JSON.stringify(set.ai)); ai.forEach((b) => { b.verdict = "false_alarm"; });
+              const s = scoreReview(ai, [], set.key);
+              return s.caught === 1 && s.falseFlags === s.correctTotal && s.correctTotal === 3; }],
+
+    ["Marking both boxes of the duplicate pair as Duplicate does not count as caught",
+      () => { const r = perfectReview(set, truth8); const k = set.key.items.find((x) => x.type === "duplicate");
+              r.ai.find((b) => b.id === k.pairId).verdict = "duplicate";
+              const s = scoreReview(r.ai, r.added, set.key);
+              return s.caught === 5 && s.rows.find((x) => x.type === "duplicate").ok === false; }],
+
+    ["Marking the original of the duplicate pair (instead of the copy) is also accepted",
+      () => { const r = perfectReview(set, truth8); const k = set.key.items.find((x) => x.type === "duplicate");
+              r.ai.find((b) => b.id === k.aiId).verdict = "correct"; r.ai.find((b) => b.id === k.pairId).verdict = "duplicate";
+              return scoreReview(r.ai, r.added, set.key).caught === 6; }],
+
+    ["An added box with the wrong label does not count for the missed object",
+      () => { const r = perfectReview(set, truth8); r.added[0].label = otherLabel(r.added[0].label, mulberry32(1));
+              return scoreReview(r.ai, r.added, set.key).caught === 5; }],
+
+    ["The corrected boxes of a perfect review are the 8 correct boxes again",
+      () => { const r = perfectReview(set, truth8); const out = buildCorrectedBoxes(r.ai, r.added);
+              return out.length === 8 && truth8.every((t) => out.some((o) => o.label === t.label && iou(o, t) > 0.99)); }],
+
+    ["COCO export writes [x, y, width, height], category id 18 for Dog, and area 1200",
+      () => { const c = buildCoco({ name: "a.jpg", width: 640, height: 480 }, [{ id: 1, label: "Dog", x: 10, y: 20, w: 30, h: 40 }]);
+              const a = c.annotations[0];
+              return JSON.stringify(a.bbox) === "[10,20,30,40]" && a.category_id === 18 && a.area === 1200; }],
+
+    ["Reader: a results list with one image id keeps boxes, scores and my five labels only",
+      () => { const o = parseDetections([
+                { image_id: 5, category_id: 18, bbox: [1, 2, 3, 4], score: 0.9 },
+                { image_id: 5, category_id: 44, bbox: [1, 2, 3, 4], score: 0.8 }], "x.jpg");
+              return o.ok && o.boxes.length === 1 && o.boxes[0].label === "Dog" && o.boxes[0].score === 0.9 && o.ignored === 1; }],
+
+    ["Reader: a results list for many images picks the image id found in the file name",
+      () => { const data = [{ image_id: 2, category_id: 1, bbox: [1, 1, 5, 5] }, { image_id: 39769, category_id: 17, bbox: [2, 2, 6, 6] }];
+              const o = parseDetections(data, "000000039769.jpg");
+              return o.ok && o.boxes.length === 1 && o.boxes[0].label === "Cat"; }],
+
+    ["Reader: a full COCO file picks the image by file name and skips crowd boxes",
+      () => { const data = { images: [{ id: 1, file_name: "a.jpg", width: 100, height: 100 }, { id: 2, file_name: "b.jpg", width: 100, height: 100 }],
+                categories: [{ id: 1, name: "person" }, { id: 7, name: "umbrella" }],
+                annotations: [{ image_id: 2, category_id: 1, bbox: [1, 2, 3, 4] }, { image_id: 1, category_id: 1, bbox: [10, 20, 30, 40] },
+                              { image_id: 1, category_id: 7, bbox: [0, 0, 5, 5] }, { image_id: 1, category_id: 1, bbox: [50, 50, 20, 20], iscrowd: 1 }] };
+              const o = parseDetections(data, "A.JPG");
+              return o.ok && o.boxes.length === 1 && o.boxes[0].x === 10 && o.crowdSkipped === 1 && o.ignored === 1; }]
+  ];
+
+  els.selfTestList.innerHTML = "";
+  let passed = 0;
+  tests.forEach(([name, fn]) => {
+    let ok = false;
+    try { ok = !!fn(); } catch (err) { ok = false; }
+    if (ok) passed++;
+    const li = document.createElement("li");
+    if (!ok) li.className = "fail";
+    const tagEl = document.createElement("span");
+    tagEl.className = "result";
+    tagEl.textContent = ok ? "PASS" : "FAIL";
+    li.append(tagEl, document.createTextNode(name));
+    els.selfTestList.appendChild(li);
+  });
+  els.selfTestSummary.textContent = `Self-test: ${passed} of ${tests.length} passed`;
+  if (passed !== tests.length) els.selfTestBox.open = true;
+}
+
+/* ---------- Start ---------- */
+els.labelSelect.innerHTML = LABELS.map((l) => `<option value="${l}">${l}</option>`).join("");
+renderAll();
+runSelfTests();
+</script>
+</body>
+</html>
