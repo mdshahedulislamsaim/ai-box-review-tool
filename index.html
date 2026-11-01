@@ -98,20 +98,32 @@
 
   /* ---------- Image stage ---------- */
   .stage {
-    background: var(--stage-bg); border-radius: 8px; min-height: 320px;
-    display: flex; align-items: center; justify-content: center; padding: 10px; overflow: hidden;
+    background: var(--stage-bg); border-radius: 8px; min-height: 320px; max-height: 80vh;
+    display: flex;      /* the image is centered with margin: auto, so a zoomed image can still be scrolled to its corners */
+    padding: 10px;
+    overflow: auto;     /* scroll bars appear when the image is zoomed in */
   }
-  .empty { text-align: center; color: var(--ink-soft); max-width: 40ch; }
+  .empty { text-align: center; color: var(--ink-soft); max-width: 40ch; margin: auto; }
   .empty strong { display: block; color: var(--ink); margin-bottom: 4px; }
 
-  /* The canvas shrinks to the displayed image size, so the overlay always matches the image */
-  .canvas { position: relative; display: none; max-width: 100%; line-height: 0; }
+  /* The canvas is exactly as big as the displayed image (its width is set by the zoom code),
+     so the overlay always matches the image */
+  .canvas { position: relative; display: none; flex: none; margin: auto; line-height: 0; }
   .canvas.show { display: block; }
   .canvas img {
-    display: block; max-width: 100%; max-height: 70vh; width: auto; height: auto;
+    display: block; width: 100%; height: auto; max-width: none; max-height: none;
     user-select: none; -webkit-user-drag: none;
   }
+  .canvas.pixelated img { image-rendering: pixelated; } /* at high zoom, show real pixel edges */
   .stage-overlay { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+  .stage-overlay.pan, .stage-overlay.pan .box { cursor: grab; }
+  .stage-overlay.panning, .stage-overlay.panning .box { cursor: grabbing; }
+
+  /* ---------- Zoom bar ---------- */
+  .zoombar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .zoombar input[type="range"] { width: 160px; accent-color: var(--accent); }
+  .zoombar .zoomtext { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+  .zoombar button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
   /* ---------- Boxes (positioned in % so they follow the image size) ---------- */
   .box {
@@ -246,7 +258,15 @@
 
     <!-- ===================== Image ===================== -->
     <main class="panel" aria-label="Image">
-      <p class="hint">Click an AI box, then choose a verdict. For Wrong label, choose the right label. For Bad box, drag the box or its handles to fix it. Drag on empty space to add a box the AI missed.</p>
+      <div class="zoombar" role="group" aria-label="Zoom and pan">
+        <button type="button" id="zoomOut" aria-label="Zoom out" disabled>−</button>
+        <input type="range" id="zoomRange" min="100" max="800" step="5" value="100" aria-label="Zoom level" disabled>
+        <button type="button" id="zoomIn" aria-label="Zoom in" disabled>+</button>
+        <span class="zoomtext" id="zoomText">100%</span>
+        <button type="button" id="zoomFit" disabled>Fit</button>
+        <button type="button" id="panBtn" aria-pressed="false" disabled>Pan</button>
+      </div>
+      <p class="hint">Click an AI box, then choose a verdict. For Wrong label, choose the right label. For Bad box, drag the box or its handles to fix it. Drag on empty space to add a box the AI missed. To see small boxes clearly, zoom in with the slider, the + and − keys, or Ctrl and the mouse wheel (F goes back to Fit). To move around, switch on Pan, or hold Space and drag.</p>
       <div class="stage" id="stage">
         <div class="empty" id="emptyState">
           <strong>No image yet</strong>
@@ -386,7 +406,8 @@ const state = {
   source: "",           // name of the loaded file
   seed: 1,              // seed used for the practice set
   key: null,            // answer key (practice mode only). It is never drawn before "Check my review".
-  scoreShown: false
+  scoreShown: false,
+  zoom: 1               // 1 = the image fits the work area; the limit is ZOOM_MAX
 };
 
 let drag = null;                // active mouse or touch action
@@ -406,6 +427,8 @@ const els = {
   practicePanel: $("practicePanel"), checkBtn: $("checkBtn"), scoreBox: $("scoreBox"),
   exportFormat: $("exportFormat"), downloadBtn: $("downloadBtn"), copyBtn: $("copyBtn"),
   exportStatus: $("exportStatus"), preview: $("preview"),
+  zoomOut: $("zoomOut"), zoomIn: $("zoomIn"), zoomRange: $("zoomRange"), zoomText: $("zoomText"),
+  zoomFit: $("zoomFit"), panBtn: $("panBtn"),
   selfTestBox: $("selfTestBox"), selfTestSummary: $("selfTestSummary"), selfTestList: $("selfTestList")
 };
 
@@ -857,6 +880,10 @@ function loadImage(file) {
     state.ai = []; state.added = []; state.selected = null; state.mode = null; state.key = null; state.scoreShown = false;
     els.emptyState.style.display = "none";
     els.canvas.classList.add("show");
+    state.zoom = 1;                       // a new image starts at "fit"
+    els.stage.scrollLeft = 0;
+    els.stage.scrollTop = 0;
+    layoutCanvas();
     setStatus(`Loaded “${file.name}” (${state.image.width} × ${state.image.height} px). Now load AI boxes or make a practice set.`);
     renderAll();
   };
@@ -914,6 +941,7 @@ function deleteAdded(id) {
 
 function renderAll() {
   updateButtons();
+  updateZoomUi();
   renderBoxes();
   renderReviewPanel();
   renderLists();
@@ -1292,6 +1320,133 @@ els.copyBtn.addEventListener("click", async () => {
    MOUSE, TOUCH AND KEYBOARD
    ===================================================================== */
 
+/* =====================================================================
+   ZOOM AND PAN
+   - Zoom only changes how big the image is on screen. The boxes sit on top of the image
+     and are drawn in % of the original size, so they stay aligned at every zoom level.
+   - Zoom 1 = the image fits the work area. Zoom 8 = eight times that size.
+   ===================================================================== */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 1.25;       // size change for each + or - press
+const PIXEL_VIEW_SCALE = 3;   // from this many screen pixels per image pixel, show hard pixel edges
+
+let panMode = false;          // the Pan button is on
+let spaceDown = false;        // the Space key is held (temporary pan)
+
+/* PURE-ZOOM-START */
+/* Keep the zoom inside the allowed range */
+function clampZoom(z) { return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)); }
+
+/* Width of the image on screen. At zoom 1 the image fits the work area and is never made
+   bigger than its own size. At zoom 2 it is twice as wide, and so on. */
+function displayWidth(imageW, imageH, availW, availH, zoom) {
+  const fit = Math.min(1, availW / imageW, availH / imageH);
+  return imageW * fit * zoom;
+}
+
+/* After the image size changes: how far to scroll so the same image point stays under the
+   same screen point. fraction = where the point is in the image (0 to 1). */
+function scrollShift(fraction, newStart, newSize, anchor) {
+  return newStart + fraction * newSize - anchor;
+}
+/* PURE-ZOOM-END */
+
+/* Set the image size on screen from the current zoom */
+function layoutCanvas() {
+  if (!state.image) return;
+  const availW = Math.max(100, els.stage.offsetWidth - 20);   // 20 = the stage padding (10 px on each side)
+  const availH = Math.max(100, window.innerHeight * 0.7);
+  const w = displayWidth(state.image.width, state.image.height, availW, availH, state.zoom);
+  els.canvas.style.width = w + "px";
+  els.canvas.classList.toggle("pixelated", w / state.image.width >= PIXEL_VIEW_SCALE);
+  updateZoomUi();
+}
+
+/* Show the zoom level and switch the buttons on or off */
+function updateZoomUi() {
+  const has = !!state.image;
+  els.zoomText.textContent = Math.round(state.zoom * 100) + "%";
+  els.zoomRange.value = Math.round(state.zoom * 100);
+  els.zoomRange.disabled = !has;
+  els.zoomOut.disabled = !has || state.zoom <= ZOOM_MIN;
+  els.zoomIn.disabled = !has || state.zoom >= ZOOM_MAX;
+  els.zoomFit.disabled = !has;
+  els.panBtn.disabled = !has;
+}
+
+/* Change the zoom. The point under the mouse (or the middle of the work area) stays where it is. */
+function setZoom(next, clientX, clientY) {
+  if (!state.image) return;
+  const z = clampZoom(next);
+  if (z === state.zoom) return;
+
+  // Which image point is under the anchor? (as a fraction of the image size)
+  const before = els.canvas.getBoundingClientRect();
+  const view = els.stage.getBoundingClientRect();
+  const ax = clientX === undefined ? view.left + view.width / 2 : clientX;
+  const ay = clientY === undefined ? view.top + view.height / 2 : clientY;
+  const fx = before.width ? clamp((ax - before.left) / before.width, 0, 1) : 0.5;
+  const fy = before.height ? clamp((ay - before.top) / before.height, 0, 1) : 0.5;
+
+  state.zoom = z;
+  layoutCanvas();
+
+  // Scroll so that the same image point is under the anchor again
+  const after = els.canvas.getBoundingClientRect();
+  els.stage.scrollLeft += scrollShift(fx, after.left, after.width, ax);
+  els.stage.scrollTop += scrollShift(fy, after.top, after.height, ay);
+}
+
+function zoomToFit() {
+  state.zoom = 1;
+  layoutCanvas();
+  els.stage.scrollLeft = 0;
+  els.stage.scrollTop = 0;
+}
+
+/* While drawing or dragging near the edge of the work area, scroll that way */
+function autoScroll(e) {
+  const r = els.stage.getBoundingClientRect();
+  const edge = 28, speed = 14;
+  if (e.clientX < r.left + edge) els.stage.scrollLeft -= speed;
+  else if (e.clientX > r.right - edge) els.stage.scrollLeft += speed;
+  if (e.clientY < r.top + edge) els.stage.scrollTop -= speed;
+  else if (e.clientY > r.bottom - edge) els.stage.scrollTop += speed;
+}
+
+/* The hand cursor shows when panning is possible */
+function updatePanCursor() {
+  els.overlay.classList.toggle("pan", panMode || spaceDown);
+}
+function setSpace(down) { spaceDown = down; updatePanCursor(); }
+
+els.zoomIn.addEventListener("click", () => setZoom(state.zoom * ZOOM_STEP));
+els.zoomOut.addEventListener("click", () => setZoom(state.zoom / ZOOM_STEP));
+els.zoomFit.addEventListener("click", zoomToFit);
+els.zoomRange.addEventListener("input", () => setZoom(Number(els.zoomRange.value) / 100));
+els.panBtn.addEventListener("click", () => {
+  panMode = !panMode;
+  els.panBtn.setAttribute("aria-pressed", String(panMode));
+  updatePanCursor();
+});
+
+// Ctrl + mouse wheel (also a pinch on many laptops) zooms around the mouse pointer
+els.stage.addEventListener("wheel", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !state.image) return;
+  e.preventDefault();
+  setZoom(state.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
+}, { passive: false });
+
+// Keep the image fitted when the window size changes
+window.addEventListener("resize", layoutCanvas);
+window.addEventListener("blur", () => setSpace(false));
+document.addEventListener("keyup", (e) => { if (e.key === " ") setSpace(false); });
+
+// The slider limits come from the same settings as the code
+els.zoomRange.min = String(ZOOM_MIN * 100);
+els.zoomRange.max = String(ZOOM_MAX * 100);
+
 function pointerToImage(e) {
   const rect = els.overlay.getBoundingClientRect();
   return {
@@ -1306,10 +1461,17 @@ function ensureFixed(kind, item) {
 }
 
 els.overlay.addEventListener("pointerdown", (e) => {
-  if (!state.image || e.button > 0) return;
+  if (!state.image || e.button > 1) return;     // left button, or middle button for panning
   e.preventDefault();
   els.overlay.focus({ preventScroll: true });
   els.overlay.setPointerCapture(e.pointerId);
+
+  // Pan: the Pan button is on, Space is held, or the middle mouse button is used
+  if (panMode || spaceDown || e.button === 1) {
+    drag = { type: "pan", x: e.clientX, y: e.clientY, left: els.stage.scrollLeft, top: els.stage.scrollTop };
+    els.overlay.classList.add("panning");
+    return;
+  }
 
   const p = pointerToImage(e);
   const handleEl = e.target.closest(".handle");
@@ -1335,6 +1497,15 @@ els.overlay.addEventListener("pointerdown", (e) => {
 
 els.overlay.addEventListener("pointermove", (e) => {
   if (!drag) return;
+
+  // Panning moves the work area, not the boxes
+  if (drag.type === "pan") {
+    els.stage.scrollLeft = drag.left - (e.clientX - drag.x);
+    els.stage.scrollTop = drag.top - (e.clientY - drag.y);
+    return;
+  }
+
+  autoScroll(e);   // near the edge of a zoomed image, keep scrolling while drawing or dragging
   const p = pointerToImage(e);
   const { width: W, height: H } = state.image;
   const min = minSize();
@@ -1369,6 +1540,11 @@ function draftFromDrag() {
 function endDrag(e) {
   if (!drag) return;
   if (els.overlay.hasPointerCapture(e.pointerId)) els.overlay.releasePointerCapture(e.pointerId);
+  if (drag.type === "pan") {
+    drag = null;
+    els.overlay.classList.remove("panning");
+    return;
+  }
   if (drag.type === "draw") {
     const d = draftFromDrag();
     if (d.w >= minSize() && d.h >= minSize()) {        // ignore accidental clicks
@@ -1383,10 +1559,21 @@ function endDrag(e) {
 els.overlay.addEventListener("pointerup", endDrag);
 els.overlay.addEventListener("pointercancel", endDrag);
 
-/* Keys 1 to 5 set a verdict, 0 clears it, Delete removes an added box, Escape deselects */
+/* Keys 1 to 5 set a verdict, 0 clears it, Delete removes an added box, Escape deselects.
+   Zoom keys (+, -, F) and Space for panning are handled first. */
 document.addEventListener("keydown", (e) => {
   const tag = (document.activeElement && document.activeElement.tagName) || "";
   if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+
+  // Zoom keys: + zooms in, - zooms out, F goes back to fit. Space (held) pans.
+  // (The 0 key is already used to clear a verdict, so it is not used for zoom here.)
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && state.image) {
+    if (e.key === "+" || e.key === "=") setZoom(state.zoom * ZOOM_STEP);
+    if (e.key === "-" || e.key === "_") setZoom(state.zoom / ZOOM_STEP);
+    if (e.key === "f" || e.key === "F") zoomToFit();
+    if (e.key === " " && tag !== "BUTTON") { e.preventDefault(); setSpace(true); }
+  }
+
   const item = currentItem();
   if (!item) { return; }
   if (state.selected.kind === "ai") {
@@ -1548,6 +1735,31 @@ function runSelfTests() {
               const o = parseDetections(data, "A.JPG");
               return o.ok && o.boxes.length === 1 && o.boxes[0].x === 10 && o.crowdSkipped === 1 && o.ignored === 1; }]
   ];
+
+  // Zoom checks (answers worked out by hand)
+  tests.push(
+    ["Zoom: a big image fits the work area at zoom 1 and is twice as wide at zoom 2",
+      () => approx(displayWidth(4000, 3000, 800, 560, 1), 746.667, 0.01) && approx(displayWidth(4000, 3000, 800, 560, 2), 1493.333, 0.01)],
+
+    ["Zoom: a small image is not made bigger at zoom 1",
+      () => approx(displayWidth(300, 200, 800, 560, 1), 300, 0.01) && approx(displayWidth(300, 200, 800, 560, 2), 600, 0.01)],
+
+    ["Zoom: the level stays between 1 and 8",
+      () => clampZoom(0.4) === 1 && clampZoom(12) === 8 && clampZoom(2.5) === 2.5],
+
+    ["Zoom: the point under the mouse stays put (scroll shift 100 + 0.5 × 1000 − 550 = 50)",
+      () => approx(scrollShift(0.5, 100, 1000, 550), 50, 0.001)],
+
+    ["Boxes stay aligned at any zoom: a box is placed in % of the image, not in screen pixels",
+      () => {
+        const keep = state.image;
+        state.image = { width: 2000, height: 1000 };
+        const el = document.createElement("div");
+        applyGeometry(el, { x: 500, y: 250, w: 1000, h: 500 });
+        state.image = keep;
+        return el.style.left === "25%" && el.style.top === "25%" && el.style.width === "50%" && el.style.height === "50%";
+      }]
+  );
 
   els.selfTestList.innerHTML = "";
   let passed = 0;
